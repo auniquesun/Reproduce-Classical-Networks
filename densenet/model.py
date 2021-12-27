@@ -12,21 +12,21 @@ class Bottleneck(nn.Module):
         """
         super(Bottleneck, self).__init__()
 
+        self.bn1 = nn.BatchNorm2d(in_channels)
         # In DenseNet, each 1x1 conv produces 4k feature maps, here k is the growth_rate
         self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=4*growth_rate, kernel_size=1, \
                                 bias=False)
-        self.bn1 = nn.BatchNorm2d(4*growth_rate)
 
+        self.bn2 = nn.BatchNorm2d(4*growth_rate)
         self.conv2 = nn.Conv2d(in_channels=4*growth_rate, out_channels=growth_rate, kernel_size=3, \
                                 padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(growth_rate)
 
-    def forward(x):
+    def forward(self, x):
         """
         each Bottleneck Layer consists of two conv operations: 1x1 conv and 3x3 conv
         """
-        out = self.conv1(F.ReLu(self.bn1(x)))
-        out = self.conv2(F.ReLu(self.bn2(out)))
+        out = self.conv1(F.relu(self.bn1(x)))
+        out = self.conv2(F.relu(self.bn2(out)))
         # concatenate tensors in COLUMN way after two conv operations
         out = torch.cat((out, x), 1)
         return out
@@ -35,11 +35,11 @@ class Bottleneck(nn.Module):
 class Transition(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(Transition, self).__init__()
-        self.bn1 = nn.BatchNorm2d(in_channels=in_channels)
+        self.bn1 = nn.BatchNorm2d(in_channels)
         self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, \
                                 kernel_size=1, bias=False)
 
-    def forward(x):
+    def forward(self, x):
         out = self.conv1(F.relu(self.bn1(x)))
         # default padding=0 in avg_pool2d in Transition Layer
         out = F.avg_pool2d(out, kernel_size=2, stride=2)
@@ -50,7 +50,7 @@ class DenseNet121(nn.Module):
     def __init__(self, in_channels, growth_rate, compression_rate, num_classes):
         super(DenseNet121, self).__init__()
 
-        self.bn1 = nn.BatchNorm2d(in_channels=in_channels)
+        self.bn1 = nn.BatchNorm2d(in_channels)
 
         """
         Note: only when padding=3, the size of input image (224x224) can be coverted 
@@ -66,17 +66,17 @@ class DenseNet121(nn.Module):
         For each dense block, it consists of L bottlenecks.
         The number of output feature maps of a dense block = L*growth_rate + in_channels
         """
-        self.dense_block1 = _make_dense_block(2*growth_rate, growth_rate, 6)
+        self.dense_block1 = self._make_dense_block(2*growth_rate, growth_rate, 6)
         channels_within_denseblock1 = 2*growth_rate + 6*growth_rate
         transition1_out_channels = math.floor(channels_within_denseblock1 * compression_rate)
         self.trans1 = Transition(channels_within_denseblock1, transition1_out_channels)
 
-        self.dense_block2 = _make_dense_block(transition1_out_channels, growth_rate, 12)
+        self.dense_block2 = self._make_dense_block(transition1_out_channels, growth_rate, 12)
         channels_within_denseblock2 = transition1_out_channels + 12*growth_rate
         transition2_out_channels =math.floor(channels_within_denseblock2 * compression_rate)
         self.trans2 = Transition(channels_within_denseblock2, transition2_out_channels)
 
-        self.dense_block3 = _make_dense_block(transition2_out_channels, growth_rate, 24)
+        self.dense_block3 = self._make_dense_block(transition2_out_channels, growth_rate, 24)
         channels_within_denseblock3 = transition2_out_channels + 24*growth_rate
         transition3_out_channels = math.floor(channels_within_denseblock3 * compression_rate)
         self.trans3 = Transition(channels_within_denseblock3, transition3_out_channels)
@@ -85,16 +85,19 @@ class DenseNet121(nn.Module):
         there is no Transition Layer 4 in DenseNet121 in their paper, Table 1
         HOWEVER, the official code add this Transition Layer, it is weird.
         """
-        self.dense_block4 = _make_dense_block(transition3_out_channels, growth_rate, 16)
+        self.dense_block4 = self._make_dense_block(transition3_out_channels, growth_rate, 16)
         channels_within_denseblock4 = transition3_out_channels + 16*growth_rate
-        transition4_out_channels = math.floor(channels_within_denseblock4 * compression_rate)
-        self.trans3 = Transition(channels_within_denseblock4, transition4_out_channels)
+        # transition4_out_channels = math.floor(channels_within_denseblock4 * compression_rate)
+        # self.trans4 = Transition(channels_within_denseblock4, transition4_out_channels)
+
+        self.hidden_linear_dim = channels_within_denseblock4
+        self.bn2 = nn.BatchNorm2d(self.hidden_linear_dim)
 
         """
         the first dim of self.fc() equals to transition4_out_channels,
-        since after final global average pooling(7x7), the 7x7 feature map will be 1x1
+        since after final global average pooling(kernel_size=7x7), the 7x7 feature map will be 1x1
         """
-        self.fc = nn.Linear(transition4_out_channels, num_classes)
+        self.fc = nn.Linear(self.hidden_linear_dim, num_classes)
 
     # For DenseNet121, each dense block consists of different number of Bottleneck Layers
     def _make_dense_block(self, in_channels, growth_rate, num_layers):
@@ -109,9 +112,9 @@ class DenseNet121(nn.Module):
             # in_channels increases by 'growth_rate' after each Bottleneck
             in_channels += growth_rate
 
-        return nn.sequential(*layers)
+        return nn.Sequential(*layers)
 
-    def forward(x):
+    def forward(self, x):
         out = self.conv1(F.relu(self.bn1(x)))
         # to keep feature map 56x56, here padding=1 in max_pool2d
         out = F.max_pool2d(out, kernel_size=3, stride=2, padding=1)
@@ -125,9 +128,16 @@ class DenseNet121(nn.Module):
         out = self.dense_block3(out)
         out = self.trans3(out)
         
-        # there is no Transition Layer 4 in DenseNet121
         out = self.dense_block4(out)
+        # there is no Transition Layer 4 in DenseNet121 in their paper, Table 1
+        # HOWEVER, the official code add this Transition Layer, it is weird.
+        # out = self.trans4(out)
 
-        out = F.relu(self.bn1(out))
-        out = torch.squeeze(F.avg_pool2d(out, kernel_size=7))
-        out = F.log_softmax(self.fc(out))
+        out = F.relu(self.bn2(out))
+        
+        out = F.avg_pool2d(out, kernel_size=7)
+        out = torch.squeeze(out)
+        # here dim=1 means softmax for every input image
+        out = F.softmax(self.fc(out), dim=1)
+
+        return out
