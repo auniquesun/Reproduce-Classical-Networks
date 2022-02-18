@@ -1,3 +1,7 @@
 */__pycache__/
 
 */.ipynb_checkpoints/
+
+yolov2/training
+
+yolov2/testing
