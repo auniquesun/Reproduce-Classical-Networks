@@ -2,7 +2,7 @@ import argparse
 
 from dataloader import CocoDataLoader
 from optimizer import Optimizer
-from loss_util import Loss
+from loss import Loss
 from model import DarkNet19
 from logs import Logger
 
@@ -36,7 +36,7 @@ def main(args):
     trainloader = coco_dataloader.get_trainloader(args)
 
     yolov2 = DarkNet19()
-    optimizer = Optimizer(yolov2.parameters(), args)
+    optimizer = Optimizer(yolov2.parameters(), args.lr)
     criterion = Loss()
 
     logger = Logger()
@@ -50,9 +50,9 @@ def main(args):
             optimizer.zero_grad()
 
             outputs = yolov2(images)
-            loss = criterion(outputs, targets, args)
+            total_loss = criterion.get_total_loss(outputs, targets, args)
 
-            loss.backward()
+            total_loss.backward()
             optimizer.step()
 
             logger.info(f'Epoch: {epoch+1}/{args.epochs}, Step: {i+1}, Loss: {loss.data}')

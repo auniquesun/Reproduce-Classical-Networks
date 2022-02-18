@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 
 class DarkNet19(nn.Module):
-    def __init__():
+    def __init__(self):
         self.conv1 = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3)
         self.conv1_bn = nn.BatchNorm2d(32)
         # maxpool: stride 2
