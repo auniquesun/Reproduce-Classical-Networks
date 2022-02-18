@@ -4,6 +4,10 @@
 3. 问题集中在DenseBlock中间的各层特征图传播维度是什么呢？  
     - 明天重点解决
 
-4. 还有一个问题是训练DenseNet肯定要用多卡，PyTorch如何把数据和模型分布式放到各个GPU上？
-
 5. 现在就差跑模型，调bug了，但还是比较多的任务
+
+4. 还有一个问题是训练DenseNet肯定要用多卡，PyTorch如何把数据和模型分布式放到各个GPU上？
+    - 一个思路是参考**mmdetection**的方法，这个之前跑过了，算是比较顺利
+
+5. 分布式训练教程，来自[pytorch官方文档](https://pytorch.org/docs/stable/distributed.html#launch-utility)，mmdetection做法就是从这里来的
+    
