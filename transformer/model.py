@@ -65,8 +65,14 @@ class MultiHeadAttention(nn.Module):
         )
 
 
-def position_encoding(seq_len, ):
-    pass
+def position_encoding(seq_len, dim_feature, device=torch.device('cpu')):
+    # 位置编码，其实直接可以设成 (batch_size, seq_len, dim_feature) 维度的向量，当作可学习参数
+    pos = torch.arange(seq_len, dtype=torch.float, device=device).reshape(1, -1, 1)
+    dim = torch.arange(dim_feature, dtype=torch.float, device=device).reshape(1, 1, -1)
+
+    phase = pos / (10000**(dim // dim_feature))
+
+    return torch.where(dim.long()%2 == 0, torch.sin(phase), torch.cos(phase))
 
 
 def feed_forward(dim_input, dim_hidden):
@@ -107,7 +113,7 @@ class TransformerEncoderLayer(nn.Module):
         dim_q = dim_k = max(dim_feature//num_heads, 1)
 
         self.attention = ResidualAndNorm(
-            # 这里要理解一下
+            # 这里要理解一下，和ResidualAndNorm中的sublayer对应起来
             MultiHeadAttention(num_heads, dim_feature, dim_q, dim_k),
             dimension=dim_feature,
             dropout=dropout
@@ -207,14 +213,15 @@ class Transformer(nn.Module):
             dropout=dropout
         )
 
-        self.encoder = TransformerDecoder(
-            num_layers=num_encoder_layers,
+        self.decoder = TransformerDecoder(
+            num_layers=num_decoder_layers,
             dim_feature=dim_feature,
             num_heads=num_heads,
             dim_hidden=dim_hidden,
             dropout=dropout
         )
 
-    def forward(src, tgt):
-        这个代码表明，先要把 self.encoder 走完，输出才会接入 decoder
-        return self.decoder(tgt, self.encoder(src))
+    def forward(self, src, tgt):
+        # 这个代码表明，先要把 self.encoder 走完，输出才会接入 decoder，而且还是接入decoder的每一层
+        memory = self.encoder(src)
+        return self.decoder(tgt, memory)
