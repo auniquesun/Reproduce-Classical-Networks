@@ -18,8 +18,7 @@ import torchvision.transforms as transforms
 from tensorboard_logger import configure, log_value
 
 from model import DenseNet121
-from utils import AverageMeter, accuracy, adjust_lr, save_checkpoint
-
+from utils import AverageMeter, ProgressMeter, accuracy, adjust_lr, save_checkpoint
 
 
 def parse_args():
@@ -27,27 +26,22 @@ def parse_args():
 
     parser.add_argument('--epochs', type=int, default=90, help='training epochs over a whole dataset')
     parser.add_argument('--batch_size', type=int, default=48, help='batch size per gpu during training')
-    parser.add_argument('--num_workers', type=int, default=18, help='number of subprocesses to use for data loading')
+    parser.add_argument('--num_workers', type=int, default=48, help='number of subprocesses to use for data loading')
     parser.add_argument('--lr', type=float, default=10e-1, help='initial learning rate of the optimizer')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum of the optimizer')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='weight decay for learning rate of the optimizer')
 
     parser.add_argument('--seed', type=int, default=0, help='seed for initialize models with same weights on different GPUs')
-    parser.add_argument('--multiprocess_distributed', action='store_true', help='use multiprocess to'  
-                        'launch N processes per node, which has N GPUs')
     parser.add_argument('--dist_backend', type=str, default='nccl', help='distributed backend')
     parser.add_argument('--dist_url', type=str, default='env://', help='url used to set up distributed training')
-    parser.add_argument('--nodes', type=int, default=1, help='total nodes for distributed processes')
-    parser.add_argument('--node_rank', type=int, default=0, help='node rank during distributed training')
-    parser.add_argument('--gpus', type=int, default=1, help='number of gpus per node')
-    parser.add_argument('--world_size', type=int, default=-1, help='total processes for distributed processes')
+    parser.add_argument('--local_rank', type=int, default=-1, help='node rank for distributed processes')
 
-    parser.add_argument('--print_freq', type=int, default=100, help='evaluation frequency during training')
+    parser.add_argument('--print_freq', type=int, default=500, help='evaluation frequency during training')
     parser.add_argument('--tensorboard', action='store_true', help='log progress using TensorBoard  ')
 
-    parser.add_argument('--dataset_root', type=str, default='/mnt/sdb/public/data/imagenet', help='root path of the training dataset')
-    parser.add_argument('--image_height', type=int, default=448, help='the height of image size input to DenseNet')
-    parser.add_argument('--image_width', type=int, default=448, help='the width of image size input to DenseNet')
+    parser.add_argument('--dataset_root', type=str, default='/mnt/sdb/public/data/common-datasets/imagenet', help='root path of the training dataset')
+    parser.add_argument('--image_height', type=int, default=224, help='the height of image size input to DenseNet')
+    parser.add_argument('--image_width', type=int, default=224, help='the width of image size input to DenseNet')
 
     parser.add_argument('--growth_rate', type=int, default=32, help='growth rate in Bottleneck layer of DenseNet')
     parser.add_argument('--compression_rate', type=float, default=0.5, help='compression rate in Transition layer of DenseNet')
@@ -57,24 +51,28 @@ def parse_args():
     return args
 
 
-best_prec1 = .0
 def main(args):
     if not torch.cuda.is_available():
         raise RuntimeError('Training DenseNet on ImageNet should use GPU devices, but CUDA is unavailable!')
-    ngpus = torch.cuda.device_count()
-    args.gpus = ngpus
 
     if args.tensorboard:
         # model-BC-layers-growth_rate
         configure('runs/DenseNet-BC-121-32')   
 
-    # new ------
-    dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url)
-    local_rank = dist.get_rank()
-    print(f'\nlocal_rank: {local_rank}\n')
-    torch.cuda.set_device(local_rank)
+    local_rank = args.local_rank
+    ngpus = torch.cuda.device_count()
 
-    device = torch.device("cuda", local_rank)
+    main_worker(local_rank, ngpus, args)
+
+
+def main_worker(local_rank, ngpus, args):
+    best_prec1 = .0
+
+    dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url)
+    
+    print(f'local_rank: {local_rank}\n')
+
+    torch.cuda.set_device(local_rank)
 
     # IMPORTANT: we need to set the random seed in each process so that the models are initialized with the same weights
     # Reference: https://yangkky.github.io/2019/07/08/distributed-pytorch-tutorial.html
@@ -86,7 +84,7 @@ def main(args):
                            compression_rate=args.compression_rate, \
                            num_classes=args.num_classes)
 
-    densenet.to(device)
+    densenet.cuda(local_rank)
 
     densenet = nn.parallel.DistributedDataParallel(densenet, \
                                                     device_ids=[local_rank], \
@@ -97,7 +95,7 @@ def main(args):
                                      std=[0.229, 0.224, 0.225])
 
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(224),
+        transforms.RandomResizedCrop(args.image_width),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         normalize
@@ -106,38 +104,37 @@ def main(args):
 
     val_transform = transforms.Compose([
         transforms.Resize(256),
-        transforms.CenterCrop(224),
+        transforms.CenterCrop(args.image_width),
         transforms.ToTensor(),
         normalize
     ])
     valset = torchvision.datasets.ImageFolder(root=os.path.join(args.dataset_root, 'val'), transform=val_transform)
     
-    train_sampler = torch.utils.data.distributed.DistributedSampler(trainset, num_replicas=args.gpus)
-    args.batch_size = int(args.batch_size/args.gpus)
-    args.num_workers = int(args.num_workers/args.gpus)
+    # num_replicas: int, Number of processes participating in distributed training. By default, world_size is retrieved from the current distributed group.
+    train_sampler = torch.utils.data.distributed.DistributedSampler(trainset, num_replicas=ngpus)
+    batch_size = args.batch_size // ngpus
+    num_workers = args.num_workers // ngpus
 
     train_data = torch.utils.data.DataLoader(
         trainset,
-        batch_size=args.batch_size,
+        batch_size=batch_size,
         shuffle=False,  # when sampler is specified, shuffle should be False
-        num_workers=args.num_workers,
+        num_workers=num_workers,
         pin_memory=True,
         sampler=train_sampler
     )
 
     val_data = torch.utils.data.DataLoader(
         valset,
-        batch_size=args.batch_size,
+        batch_size=batch_size,
         shuffle=False,
-        num_workers=args.num_workers,
+        num_workers=num_workers,
         pin_memory=True
     )
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss().cuda(local_rank)
     optimizer = optim.SGD(densenet.parameters(), lr=args.lr, momentum=args.momentum, \
                             weight_decay=args.weight_decay)   
-
-    global best_prec1
 
     # Reference: https://discuss.pytorch.org/t/what-does-torch-backends-cudnn-benchmark-do/5936/2
     # this is useful for cudnn finding optimal set of algorithms for particular configurations 
@@ -150,7 +147,7 @@ def main(args):
 
         adjust_lr(args, optimizer, epoch)
 
-        losses, top1, top5 = train(densenet, train_data, criterion, optimizer, epoch, args)        
+        losses, top1, top5 = train(densenet, train_data, criterion, optimizer, epoch, local_rank, args)        
 
         if args.tensorboard:
             log_value('train_loss', losses.avg, epoch)
@@ -170,7 +167,7 @@ def main(args):
         }, is_best)
 
 
-def train(densenet, train_data, criterion, optimizer, epoch, args):
+def train(densenet, train_data, criterion, optimizer, epoch, local_rank, args):
     # enable train mode
     densenet.train()
 
@@ -180,13 +177,17 @@ def train(densenet, train_data, criterion, optimizer, epoch, args):
     top1 = AverageMeter()
     top5 = AverageMeter()
 
+    # progress = ProgressMeter(len(train_data), 
+    #                         [batch_time, data_time, losses, top1, top5],
+    #                         prefix="Epoch: [{0}]".format(epoch))
+
     start = time.time()
     for i, (images, labels) in enumerate(train_data):
         # measure data loading time
         data_time.update(time.time() - start)
 
         # here images and labels are in BATCH-wise
-        images, labels = images.cuda(), labels.cuda()
+        images, labels = images.cuda(local_rank), labels.cuda(local_rank)
 
         outputs = densenet(images)
         loss = criterion(outputs, labels)
@@ -205,6 +206,8 @@ def train(densenet, train_data, criterion, optimizer, epoch, args):
         batch_time.update(end - start)
 
         if i % args.print_freq == 0:
+            # i is the batch index
+            # progress.display(i)
             print('Epoch: [{0}][{1}/{2}]\t'
                 'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                 'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
@@ -229,6 +232,10 @@ def validate(args, val_data, densenet, criterion, epoch):
     top1 = AverageMeter()
     top5 = AverageMeter()
 
+    # progress = ProgressMeter(len(val_data),
+    #                         [batch_time, losses, top1, top5],
+    #                         prefix="Test: [{0}]".format(epoch))
+
     start = time.time()
     with torch.no_grad():
         for i, (images, labels) in enumerate(val_data):
@@ -247,6 +254,7 @@ def validate(args, val_data, densenet, criterion, epoch):
             batch_time.update(end-start)
 
             if i % args.print_freq == 0:
+                # progress.display(i)
                 print('Test: [{0}/{1}]\t'
                     'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                     'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
