@@ -115,7 +115,7 @@ def main_worker(local_rank, ngpus, args):
     batch_size = args.batch_size // ngpus
     num_workers = args.num_workers // ngpus
 
-    train_data = torch.utils.data.DataLoader(
+    train_data = DataLoader(
         trainset,
         batch_size=batch_size,
         shuffle=False,  # when sampler is specified, shuffle should be False
@@ -124,7 +124,7 @@ def main_worker(local_rank, ngpus, args):
         sampler=train_sampler
     )
 
-    val_data = torch.utils.data.DataLoader(
+    val_data = DataLoader(
         valset,
         batch_size=batch_size,
         shuffle=False,
@@ -158,7 +158,7 @@ def main_worker(local_rank, ngpus, args):
         prec1 = validate(args, val_data, densenet, criterion, epoch)
 
         is_best = prec1.avg > best_prec1
-        best_prec1 = max(prec1, best_prec1)
+        best_prec1 = max(prec1.avg, best_prec1)
         save_checkpoint({
             'epoch': epoch+1,
             'state_dict': densenet.state_dict(),
