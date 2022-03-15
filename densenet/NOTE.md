@@ -11,3 +11,7 @@
 
 5. 分布式训练教程，来自[pytorch官方文档](https://pytorch.org/docs/stable/distributed.html#launch-utility)，mmdetection做法就是从这里来的
     
+6. 感觉这个代码不对啊
+    - 打印日志，应该是整个模型整体打一份，现在是每个GPU打一份
+    - loss一直不变
+    - precision每个epoch的输出都一样

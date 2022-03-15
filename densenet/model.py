@@ -53,7 +53,7 @@ class DenseNet121(nn.Module):
         self.bn1 = nn.BatchNorm2d(in_channels)
 
         """
-        Note: only when padding=3, the size of input image (224x224) can be coverted 
+        Note: only when padding=3, the size of input image (224x224) can be converted 
         to 112x112 according to the computing equation, since kernel_size(=7x7) and stride(=2) are fixed
 
         I also refer to original implementation: 

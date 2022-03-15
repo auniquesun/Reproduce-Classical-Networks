@@ -1,4 +1,4 @@
-import os
+import shutil
 import torch
 
 
@@ -68,4 +68,4 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     """Save current model and best model only"""
     torch.save(state, filename)
     if is_best:
-        os.shutil.copy(filename, 'model_best.pth.tar')
+        shutil.copy(filename, 'model_best.pth.tar')

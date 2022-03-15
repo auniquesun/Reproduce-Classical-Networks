@@ -1,3 +1,5 @@
+# distributed training on multi nodes
+
 import os
 import time
 import argparse
